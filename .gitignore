@@ -2,3 +2,4 @@
 /dist/
 /wippy
 .wippy/
+/src/treesitter/assets/*.wasm

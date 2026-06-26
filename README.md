@@ -47,12 +47,22 @@ Errors are structured: check `err:kind()` against `errors.INVALID` / `errors.INT
 
 ## Building
 
+The compiled engine (`src/treesitter/assets/treesitter.wasm`, ~12 MB) is **not committed** — it is a build artifact produced on demand. Build it before running, testing, or publishing the module:
+
 ```bash
-make image            # build the wasi-sdk + rust image (once)
-make build-component  # compile the Rust WASM engine in docker, stage it, inject its sha256
-make wippy            # point ./wippy at ../runtime/dist/wippy-<os>-<arch>
-make test             # run the test suites against the runtime
-make check            # build-component + lint + test
+make image            # build the wasi-sdk + rust image (once; requires Docker)
+make build-component  # compile the Rust engine in docker, stage the .wasm, inject its sha256 into _index.yaml
 ```
 
-The component is built reproducibly inside Docker (wasi-sdk + rustup), so a host C/Rust toolchain is not required.
+`build-component` is reproducible (pinned wasi-sdk, rustup toolchain, and `Cargo.lock`), so it regenerates the exact bytes the committed `_index.yaml` hash expects. A host C/Rust toolchain is not required — everything compiles inside Docker.
+
+First run end to end:
+
+```bash
+make image            # 1. build the toolchain image (once)
+make build-component  # 2. produce src/treesitter/assets/treesitter.wasm
+make wippy            # 3. point ./wippy at ../runtime/dist/wippy-<os>-<arch>
+./wippy install       # 4. vendor test dependencies (wippy/test, wippy/terminal) into .wippy
+make test             # 5. run the suites against the runtime
+make check            # build-component + lint + test in one shot
+```
