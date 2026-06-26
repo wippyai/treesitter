@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 
-use serde::Serialize;
 use serde_json::{json, Value};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, Tree};
@@ -29,6 +28,7 @@ const MAX_LIVE_TREES: usize = 1024;
 struct StoredTree {
     tree: Tree,
     lang: String,
+    cols: Option<Columns>,
 }
 
 struct Store {
@@ -114,94 +114,225 @@ fn language_for(alias: &str) -> Option<Language> {
     None
 }
 
-#[derive(Serialize)]
-struct Point {
-    row: usize,
-    column: usize,
+#[derive(Clone)]
+struct Columns {
+    n: usize,
+    root: usize,
+    kinds: Vec<String>,
+    k: Vec<usize>,
+    gn: BTreeMap<usize, usize>,
+    sb: Vec<usize>,
+    eb: Vec<usize>,
+    sr: Vec<usize>,
+    sc: Vec<usize>,
+    er: Vec<usize>,
+    ec: Vec<usize>,
+    parent: Vec<i64>,
+    flags: Vec<u8>,
+    dc: Vec<usize>,
+    ch_off: Vec<usize>,
+    ch_val: Vec<usize>,
+    fields: BTreeMap<usize, BTreeMap<usize, String>>,
+    field_ids: BTreeMap<usize, BTreeMap<usize, u16>>,
 }
 
-#[derive(Serialize)]
-struct NodeJson {
-    id: usize,
-    kind: String,
-    grammar_name: String,
-    is_named: bool,
-    is_extra: bool,
-    is_missing: bool,
-    is_error: bool,
-    has_error: bool,
-    start_byte: usize,
-    end_byte: usize,
-    start_point: Point,
-    end_point: Point,
-    parent: i64,
-    children: Vec<usize>,
-    named_children: Vec<usize>,
-    fields: BTreeMap<usize, String>,
-    field_ids: BTreeMap<usize, u16>,
-    descendant_count: usize,
+#[derive(Default)]
+struct Builder {
+    kinds: Vec<String>,
+    kind_index: BTreeMap<String, usize>,
+    k: Vec<usize>,
+    gn: BTreeMap<usize, usize>,
+    sb: Vec<usize>,
+    eb: Vec<usize>,
+    sr: Vec<usize>,
+    sc: Vec<usize>,
+    er: Vec<usize>,
+    ec: Vec<usize>,
+    parent: Vec<i64>,
+    flags: Vec<u8>,
+    dc: Vec<usize>,
+    children: Vec<Vec<usize>>,
+    fields: BTreeMap<usize, BTreeMap<usize, String>>,
+    field_ids: BTreeMap<usize, BTreeMap<usize, u16>>,
 }
 
-fn serialize_node(node: Node, parent: i64, lang: &Language, out: &mut Vec<NodeJson>) -> usize {
-    let idx = out.len();
-    let sp = node.start_position();
-    let ep = node.end_position();
-    out.push(NodeJson {
-        id: idx,
-        kind: node.kind().to_string(),
-        grammar_name: node.grammar_name().to_string(),
-        is_named: node.is_named(),
-        is_extra: node.is_extra(),
-        is_missing: node.is_missing(),
-        is_error: node.is_error(),
-        has_error: node.has_error(),
-        start_byte: node.start_byte(),
-        end_byte: node.end_byte(),
-        start_point: Point { row: sp.row, column: sp.column },
-        end_point: Point { row: ep.row, column: ep.column },
-        parent,
-        children: Vec::new(),
-        named_children: Vec::new(),
-        fields: BTreeMap::new(),
-        field_ids: BTreeMap::new(),
-        descendant_count: node.descendant_count(),
-    });
-
-    let mut children = Vec::new();
-    let mut named_children = Vec::new();
-    let mut fields = BTreeMap::new();
-    let mut field_ids = BTreeMap::new();
-    let count = node.child_count();
-    let mut pos = 0usize;
-    while pos < count {
-        if let Some(child) = node.child(pos) {
-            let cidx = serialize_node(child, idx as i64, lang, out);
-            if let Some(name) = node.field_name_for_child(pos as u32) {
-                fields.insert(pos, name.to_string());
-                if let Some(fid) = lang.field_id_for_name(name) {
-                    field_ids.insert(pos, fid.get());
-                }
-            }
-            if child.is_named() {
-                named_children.push(cidx);
-            }
-            children.push(cidx);
+impl Builder {
+    fn intern(&mut self, s: &str) -> usize {
+        if let Some(&id) = self.kind_index.get(s) {
+            return id;
         }
-        pos += 1;
+        let id = self.kinds.len();
+        self.kinds.push(s.to_string());
+        self.kind_index.insert(s.to_string(), id);
+        id
     }
 
-    let n = &mut out[idx];
-    n.children = children;
-    n.named_children = named_children;
-    n.fields = fields;
-    n.field_ids = field_ids;
-    idx
+    fn visit(&mut self, node: Node, parent: i64, lang: &Language) -> usize {
+        let idx = self.k.len();
+        let kind = node.kind();
+        let kid = self.intern(kind);
+        self.k.push(kid);
+        let grammar = node.grammar_name();
+        if grammar != kind {
+            let gid = self.intern(grammar);
+            self.gn.insert(idx, gid);
+        }
+        let sp = node.start_position();
+        let ep = node.end_position();
+        self.sb.push(node.start_byte());
+        self.eb.push(node.end_byte());
+        self.sr.push(sp.row);
+        self.sc.push(sp.column);
+        self.er.push(ep.row);
+        self.ec.push(ep.column);
+        self.parent.push(parent);
+        let mut flag = 0u8;
+        if node.is_named() {
+            flag |= 1;
+        }
+        if node.is_extra() {
+            flag |= 2;
+        }
+        if node.is_missing() {
+            flag |= 4;
+        }
+        if node.is_error() {
+            flag |= 8;
+        }
+        if node.has_error() {
+            flag |= 16;
+        }
+        self.flags.push(flag);
+        self.dc.push(node.descendant_count());
+        self.children.push(Vec::new());
+
+        let mut kids = Vec::new();
+        let mut fmap = BTreeMap::new();
+        let mut fidmap = BTreeMap::new();
+        let count = node.child_count();
+        let mut pos = 0usize;
+        while pos < count {
+            if let Some(child) = node.child(pos) {
+                let child_pos = kids.len();
+                let cidx = self.visit(child, idx as i64, lang);
+                if let Some(name) = node.field_name_for_child(pos as u32) {
+                    fmap.insert(child_pos, name.to_string());
+                    if let Some(fid) = lang.field_id_for_name(name) {
+                        fidmap.insert(child_pos, fid.get());
+                    }
+                }
+                kids.push(cidx);
+            }
+            pos += 1;
+        }
+        self.children[idx] = kids;
+        if !fmap.is_empty() {
+            self.fields.insert(idx, fmap);
+        }
+        if !fidmap.is_empty() {
+            self.field_ids.insert(idx, fidmap);
+        }
+        idx
+    }
+
+    fn finish(self) -> Columns {
+        let n = self.k.len();
+        let mut ch_off = Vec::with_capacity(n + 1);
+        let mut ch_val = Vec::new();
+        let mut acc = 0usize;
+        ch_off.push(0);
+        for kids in &self.children {
+            acc += kids.len();
+            for &c in kids {
+                ch_val.push(c);
+            }
+            ch_off.push(acc);
+        }
+        Columns {
+            n,
+            root: 0,
+            kinds: self.kinds,
+            k: self.k,
+            gn: self.gn,
+            sb: self.sb,
+            eb: self.eb,
+            sr: self.sr,
+            sc: self.sc,
+            er: self.er,
+            ec: self.ec,
+            parent: self.parent,
+            flags: self.flags,
+            dc: self.dc,
+            ch_off,
+            ch_val,
+            fields: self.fields,
+            field_ids: self.field_ids,
+        }
+    }
 }
 
-fn serialize_tree(tree: &Tree, lang: &Language) -> Vec<NodeJson> {
-    let mut out = Vec::new();
-    serialize_node(tree.root_node(), -1, lang, &mut out);
-    out
+fn build_columns(tree: &Tree, lang: &Language) -> Columns {
+    let mut b = Builder::default();
+    b.visit(tree.root_node(), -1, lang);
+    b.finish()
+}
+
+fn node_record(c: &Columns, id: usize) -> Value {
+    let off = c.ch_off[id];
+    let end = c.ch_off[id + 1];
+    let children: Vec<usize> = c.ch_val[off..end].to_vec();
+    let named_children: Vec<usize> =
+        children.iter().copied().filter(|&cid| c.flags[cid] & 1 != 0).collect();
+    let mut rec = json!({
+        "kind": c.kinds[c.k[id]],
+        "flags": c.flags[id],
+        "sb": c.sb[id],
+        "eb": c.eb[id],
+        "sr": c.sr[id],
+        "sc": c.sc[id],
+        "er": c.er[id],
+        "ec": c.ec[id],
+        "parent": c.parent[id],
+        "dc": c.dc[id],
+        "children": children,
+        "named_children": named_children,
+    });
+    if let Some(gid) = c.gn.get(&id) {
+        rec["gn"] = json!(c.kinds[*gid]);
+    }
+    if let Some(f) = c.fields.get(&id) {
+        rec["fields"] = json!(f);
+    }
+    if let Some(f) = c.field_ids.get(&id) {
+        rec["field_ids"] = json!(f);
+    }
+    rec
+}
+
+fn op_node(req: &Value) -> String {
+    let handle = match req.get("handle").and_then(|v| v.as_u64()) {
+        Some(h) => h,
+        None => return err("node: 'handle' required"),
+    };
+    let id = req.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let mut s = store().lock().unwrap();
+    let st = match s.trees.get_mut(&handle) {
+        Some(st) => st,
+        None => return err("node: unknown handle"),
+    };
+    if st.cols.is_none() {
+        let lang = match language_for(&st.lang) {
+            Some(l) => l,
+            None => return err("node: stored language unavailable"),
+        };
+        let cols = build_columns(&st.tree, &lang);
+        st.cols = Some(cols);
+    }
+    let c = st.cols.as_ref().unwrap();
+    if id >= c.n {
+        return err("node: index out of range");
+    }
+    node_record(c, id).to_string()
 }
 
 fn node_at_index(root: Node, target: usize) -> Option<Node> {
@@ -264,7 +395,7 @@ fn op_parse(req: &Value) -> String {
         None => return err("failed to parse code"),
     };
 
-    let nodes = serialize_tree(&tree, &lang);
+    let n = tree.root_node().descendant_count();
 
     let mut s = store().lock().unwrap();
     if s.trees.len() >= MAX_LIVE_TREES {
@@ -272,9 +403,9 @@ fn op_parse(req: &Value) -> String {
     }
     let handle = s.next;
     s.next += 1;
-    s.trees.insert(handle, StoredTree { tree, lang: language.to_string() });
+    s.trees.insert(handle, StoredTree { tree, lang: language.to_string(), cols: None });
 
-    json!({ "handle": handle, "root": 0, "nodes": nodes }).to_string()
+    json!({ "handle": handle, "root": 0, "n": n }).to_string()
 }
 
 fn op_clone(req: &Value) -> String {
@@ -284,7 +415,11 @@ fn op_clone(req: &Value) -> String {
     };
     let mut s = store().lock().unwrap();
     let cloned = match s.trees.get(&handle) {
-        Some(st) => StoredTree { tree: st.tree.clone(), lang: st.lang.clone() },
+        Some(st) => StoredTree {
+            tree: st.tree.clone(),
+            lang: st.lang.clone(),
+            cols: None,
+        },
         None => return err("clone: unknown handle"),
     };
     if s.trees.len() >= MAX_LIVE_TREES {
@@ -338,13 +473,10 @@ fn op_edit(req: &Value) -> String {
         Some(st) => st,
         None => return err("edit: unknown handle"),
     };
-    let lang = match language_for(&stored.lang) {
-        Some(l) => l,
-        None => return err("edit: stored language unavailable"),
-    };
     stored.tree.edit(&input);
-    let nodes = serialize_tree(&stored.tree, &lang);
-    json!({ "handle": handle, "root": 0, "nodes": nodes }).to_string()
+    stored.cols = None;
+    let n = stored.tree.root_node().descendant_count();
+    json!({ "handle": handle, "n": n }).to_string()
 }
 
 fn op_changed_ranges(req: &Value) -> String {
@@ -365,6 +497,39 @@ fn op_changed_ranges(req: &Value) -> String {
     };
     let ranges: Vec<Value> = a.tree.changed_ranges(&b.tree).map(|r| range_json(&r)).collect();
     json!({ "ranges": ranges }).to_string()
+}
+
+fn op_descendant(req: &Value) -> String {
+    let handle = match req.get("handle").and_then(|v| v.as_u64()) {
+        Some(h) => h,
+        None => return err("descendant: 'handle' required"),
+    };
+    let id = req.get("node").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let sp = match req.get("start") {
+        Some(p) => read_point(p, "row", "column"),
+        None => return err("descendant: 'start' required"),
+    };
+    let ep = match req.get("end") {
+        Some(p) => read_point(p, "row", "column"),
+        None => return err("descendant: 'end' required"),
+    };
+    let s = store().lock().unwrap();
+    let st = match s.trees.get(&handle) {
+        Some(st) => st,
+        None => return err("descendant: unknown handle"),
+    };
+    let root = st.tree.root_node();
+    let node = match node_at_index(root, id) {
+        Some(n) => n,
+        None => return err("descendant: index out of range"),
+    };
+    match node.named_descendant_for_point_range(sp, ep) {
+        Some(d) => {
+            let map = build_id_index(root);
+            json!({ "node": map.get(&d.id()) }).to_string()
+        }
+        None => json!({ "node": Value::Null }).to_string(),
+    }
 }
 
 fn op_sexp(req: &Value) -> String {
@@ -606,10 +771,12 @@ fn dispatch(request: &str) -> String {
     };
     match req.get("op").and_then(|v| v.as_str()).unwrap_or("") {
         "parse" => op_parse(&req),
+        "node" => op_node(&req),
         "clone" => op_clone(&req),
         "edit" => op_edit(&req),
         "changed_ranges" => op_changed_ranges(&req),
         "included_ranges" => op_included_ranges(&req),
+        "descendant" => op_descendant(&req),
         "sexp" => op_sexp(&req),
         "free" => op_free(&req),
         "languages" => op_languages(),
@@ -635,9 +802,15 @@ mod tests {
         let v = parse("go", "package main\n\nfunc hello() string { return \"hi\" }\n");
         assert!(v.get("error").is_none(), "unexpected error: {}", v);
         assert_eq!(v["root"], json!(0));
-        let nodes = v["nodes"].as_array().unwrap();
-        assert_eq!(nodes[0]["kind"], json!("source_file"));
-        assert_eq!(nodes[0]["parent"], json!(-1));
+        assert!(v["n"].as_u64().unwrap() > 1);
+        let handle = v["handle"].as_u64().unwrap();
+        let r: Value = serde_json::from_str(
+            &dispatch(&json!({ "op": "node", "handle": handle, "id": 0 }).to_string()),
+        )
+        .unwrap();
+        assert_eq!(r["kind"], json!("source_file"));
+        assert_eq!(r["parent"], json!(-1));
+        assert!(r["children"].as_array().unwrap().len() >= 1);
     }
 
     #[test]
@@ -661,11 +834,9 @@ mod tests {
         let caps = r["captures"].as_array().unwrap();
         assert_eq!(caps.len(), 2);
         assert_eq!(caps[0]["name"], json!("name"));
-        let nodes = v["nodes"].as_array().unwrap();
-        let first = caps[0]["node"].as_u64().unwrap() as usize;
-        let slice = &code[nodes[first]["start_byte"].as_u64().unwrap() as usize
-            ..nodes[first]["end_byte"].as_u64().unwrap() as usize];
-        assert_eq!(slice, "hello");
+        let sb = caps[0]["start_byte"].as_u64().unwrap() as usize;
+        let eb = caps[0]["end_byte"].as_u64().unwrap() as usize;
+        assert_eq!(&code[sb..eb], "hello");
     }
 
     #[test]

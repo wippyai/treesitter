@@ -8,6 +8,19 @@ entries:
       comment: Assertion primitives for the migrated tree-sitter parity tests.
     source: file://assert.lua
 
+  - name: bench
+    kind: process.lua
+    meta:
+      comment: Parse/walk/query throughput benchmark across source sizes.
+    source: file://bench.lua
+    method: run
+    modules:
+      - time
+      - funcs
+      - json
+    imports:
+      treesitter: treesitter:treesitter
+
   - name: smoke_test
     kind: function.lua
     meta:

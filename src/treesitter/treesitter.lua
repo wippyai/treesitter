@@ -22,6 +22,12 @@ for _, entry in ipairs(NAMES) do
     end
 end
 
+local FLAG_NAMED = 1
+local FLAG_EXTRA = 2
+local FLAG_MISSING = 4
+local FLAG_ERROR = 8
+local FLAG_HAS_ERROR = 16
+
 local function fail(message: any, kind: any?): any
     return errors.new({
         message = message,
@@ -43,11 +49,23 @@ local function call(req: any): (any, any?)
     return decoded, nil
 end
 
+local function fetch_record(tree: any, id: any): any
+    local r, err = call({ op = "node", handle = tree.handle, id = id })
+    if err ~= nil or r == nil then
+        error("treesitter: node fetch failed: " .. tostring(err), 2)
+    end
+    return r
+end
+
 local function point_le(a: any, b: any): boolean
     if a.row ~= b.row then
         return a.row < b.row
     end
     return a.column <= b.column
+end
+
+local function flagged(record: any, bit: any): boolean
+    return math.floor(record.flags / bit) % 2 >= 1
 end
 
 local Node = {}
@@ -57,86 +75,92 @@ local function wrap_node(tree: any, id: any): any
     if id == nil or id < 0 then
         return nil
     end
-    return setmetatable({ tree = tree, i = id }, Node)
+    return setmetatable({ tree = tree, i = id, record = nil }, Node)
 end
 
-local function raw(self: any): any
-    return self.tree.nodes[self.i + 1]
+local function rec(self: any): any
+    if self.record == nil then
+        self.record = fetch_record(self.tree, self.i)
+    end
+    return self.record
 end
 
 function Node:kind()
-    return raw(self).kind
+    return rec(self).kind
 end
 
 Node.type = Node.kind
 
 function Node:grammar_name()
-    return raw(self).grammar_name
+    local r = rec(self)
+    return r.gn or r.kind
 end
 
 function Node:is_named()
-    return raw(self).is_named
+    return flagged(rec(self), FLAG_NAMED)
 end
 
 function Node:is_extra()
-    return raw(self).is_extra
+    return flagged(rec(self), FLAG_EXTRA)
 end
 
 function Node:is_missing()
-    return raw(self).is_missing
+    return flagged(rec(self), FLAG_MISSING)
 end
 
 function Node:is_error()
-    return raw(self).is_error
+    return flagged(rec(self), FLAG_ERROR)
 end
 
 function Node:has_error()
-    return raw(self).has_error
+    return flagged(rec(self), FLAG_HAS_ERROR)
 end
 
 function Node:start_byte()
-    return raw(self).start_byte + self.tree.byte_offset
+    return rec(self).sb + self.tree.byte_offset
 end
 
 function Node:end_byte()
-    return raw(self).end_byte + self.tree.byte_offset
+    return rec(self).eb + self.tree.byte_offset
 end
 
-local function offset_point(self: any, p: any): any
-    local row = p.row + self.tree.row_offset
-    local column = p.column
-    if p.row == 0 then
-        column = column + self.tree.column_offset
+local function offset_point(self: any, row: any, column: any): any
+    local r = row + self.tree.row_offset
+    local c = column
+    if row == 0 then
+        c = c + self.tree.column_offset
     end
-    return { row = row, column = column }
+    return { row = r, column = c }
 end
 
 function Node:start_point()
-    return offset_point(self, raw(self).start_point)
+    local r = rec(self)
+    return offset_point(self, r.sr, r.sc)
 end
 
 function Node:end_point()
-    return offset_point(self, raw(self).end_point)
+    local r = rec(self)
+    return offset_point(self, r.er, r.ec)
 end
 
 function Node:child_count()
-    return #raw(self).children
-end
-
-function Node:named_child_count()
-    return #raw(self).named_children
+    return #rec(self).children
 end
 
 function Node:child(index)
-    return wrap_node(self.tree, raw(self).children[index + 1])
+    return wrap_node(self.tree, rec(self).children[index + 1])
+end
+
+function Node:named_child_count()
+    return #rec(self).named_children
 end
 
 function Node:named_child(index)
-    return wrap_node(self.tree, raw(self).named_children[index + 1])
+    return wrap_node(self.tree, rec(self).named_children[index + 1])
 end
 
 function Node:parent()
-    local p = raw(self).parent
+    local p = rec(self).parent
     if p == nil or p < 0 then
         return nil
     end
@@ -144,28 +168,20 @@ function Node:parent()
 end
 
 local function sibling_at(self: any, step: any, named_only: any): any
-    local parent = raw(self).parent
-    if parent == nil or parent < 0 then
+    local r = rec(self)
+    if r.parent < 0 then
         return nil
     end
-    local siblings = self.tree.nodes[parent + 1].children
-    local pos = nil
-    for idx, id in ipairs(siblings) do
+    local parent = wrap_node(self.tree, r.parent)
+    local list = named_only and rec(parent).named_children or rec(parent).children
+    for idx, id in ipairs(list) do
         if id == self.i then
-            pos = idx
-            break
+            local sib = list[idx + step]
+            if sib == nil then
+                return nil
+            end
+            return wrap_node(self.tree, sib)
         end
-    end
-    if pos == nil then
-        return nil
-    end
-    local j = pos + step
-    while siblings[j] ~= nil do
-        local candidate = self.tree.nodes[siblings[j] + 1]
-        if not named_only or candidate.is_named then
-            return wrap_node(self.tree, siblings[j])
-        end
-        j = j + step
     end
     return nil
 end
@@ -187,44 +203,43 @@ function Node:prev_named_sibling()
 end
 
 function Node:child_by_field_name(name)
-    local node = raw(self)
-    local fields = node.fields or {}
-    for pos = 0, #node.children - 1 do
+    local r = rec(self)
+    local fields = r.fields
+    if fields == nil then
+        return nil
+    end
+    for pos = 0, #r.children - 1 do
         if fields[tostring(pos)] == name then
-            return wrap_node(self.tree, node.children[pos + 1])
+            return wrap_node(self.tree, r.children[pos + 1])
         end
     end
     return nil
 end
 
 function Node:field_name_for_child(index)
-    local fields = raw(self).fields or {}
+    local fields = rec(self).fields
+    if fields == nil then
+        return nil
+    end
     return fields[tostring(index)]
 end
 
 function Node:descendant_count()
-    return raw(self).descendant_count
+    return rec(self).dc
 end
 
 function Node:named_descendant_for_point_range(start_point, end_point)
-    local node = raw(self)
-    local first = self.i
-    local last = self.i + node.descendant_count
-    local best = nil
-    local best_span = nil
-    for idx = first, last do
-        local n = self.tree.nodes[idx + 1]
-        if n.is_named
-            and point_le(n.start_point, start_point)
-            and point_le(end_point, n.end_point) then
-            local span = (n.end_byte - n.start_byte)
-            if best_span == nil or span <= best_span then
-                best = idx
-                best_span = span
-            end
-        end
+    local res, err = call({
+        op = "descendant",
+        handle = self.tree.handle,
+        node = self.i,
+        start = { row = start_point.row, column = start_point.column },
+        ["end"] = { row = end_point.row, column = end_point.column },
+    })
+    if err ~= nil or res == nil then
+        return nil
     end
-    return wrap_node(self.tree, best)
+    return wrap_node(self.tree, res.node)
 end
 
 function Node:text(source)
@@ -235,13 +250,11 @@ function Node:text(source)
         end
         code = self.tree.source
     end
-    local node = raw(self)
-    local start_byte = node.start_byte
-    local end_byte = node.end_byte
-    if start_byte > end_byte or end_byte > #code then
+    local r = rec(self)
+    if r.sb > r.eb or r.eb > #code then
         return nil, fail("invalid byte range")
     end
-    return code:sub(start_byte + 1, end_byte)
+    return code:sub(r.sb + 1, r.eb)
 end
 
 function Node:to_sexp()
@@ -260,8 +273,18 @@ local function new_cursor(tree: any, start_id: any): any
         tree = tree,
         start = start_id,
         stack = { start_id },
+        cache = {},
         closed = false,
     }, Cursor)
+end
+
+local function cursor_rec(self: any, id: any): any
+    local r = self.cache[id]
+    if r == nil then
+        r = fetch_record(self.tree, id)
+        self.cache[id] = r
+    end
+    return r
 end
 
 local function cursor_current(self: any): any
@@ -286,8 +309,8 @@ local function cursor_field_pos(self: any): (any, any)
     end
     local cur = cursor_current(self)
     local parent = self.stack[#self.stack - 1]
-    local siblings = self.tree.nodes[parent + 1].children
-    for idx, id in ipairs(siblings) do
+    local children = cursor_rec(self, parent).children
+    for idx, id in ipairs(children) do
         if id == cur then
             return parent, idx - 1
         end
@@ -300,8 +323,11 @@ function Cursor:current_field_id()
     if parent == nil then
         return 0
     end
-    local field_ids = self.tree.nodes[parent + 1].field_ids or {}
-    return field_ids[tostring(pos)] or 0
+    local ids = cursor_rec(self, parent).field_ids
+    if ids == nil then
+        return 0
+    end
+    return ids[tostring(pos)] or 0
 end
 
 function Cursor:current_field_name()
@@ -309,7 +335,10 @@ function Cursor:current_field_name()
     if parent == nil then
         return nil
     end
-    local fields = self.tree.nodes[parent + 1].fields or {}
+    local fields = cursor_rec(self, parent).fields
+    if fields == nil then
+        return nil
+    end
     return fields[tostring(pos)]
 end
 
@@ -322,7 +351,7 @@ function Cursor:goto_parent()
 end
 
 function Cursor:goto_first_child()
-    local children = self.tree.nodes[cursor_current(self) + 1].children
+    local children = cursor_rec(self, cursor_current(self)).children
     if #children == 0 then
         return false
     end
@@ -331,7 +360,7 @@ function Cursor:goto_first_child()
 end
 
 function Cursor:goto_last_child()
-    local children = self.tree.nodes[cursor_current(self) + 1].children
+    local children = cursor_rec(self, cursor_current(self)).children
     if #children == 0 then
         return false
     end
@@ -345,10 +374,10 @@ local function cursor_goto_sibling(self: any, step: any): boolean
     end
     local cur = cursor_current(self)
     local parent = self.stack[#self.stack - 1]
-    local siblings = self.tree.nodes[parent + 1].children
-    for idx, id in ipairs(siblings) do
+    local children = cursor_rec(self, parent).children
+    for idx, id in ipairs(children) do
         if id == cur then
-            local sib = siblings[idx + step]
+            local sib = children[idx + step]
             if sib == nil then
                 return false
             end
@@ -376,15 +405,15 @@ function Cursor:goto_descendant(index)
         if node == self.start then
             break
         end
-        node = self.tree.nodes[node + 1].parent
+        node = cursor_rec(self, node).parent
     end
     self.stack = path
 end
 
 local function cursor_goto_first_child_for(self: any, predicate: any): any
-    local children = self.tree.nodes[cursor_current(self) + 1].children
+    local children = cursor_rec(self, cursor_current(self)).children
     for idx, id in ipairs(children) do
-        if predicate(self.tree.nodes[id + 1]) then
+        if predicate(cursor_rec(self, id)) then
             table.insert(self.stack, id)
             return idx - 1
         end
@@ -393,20 +422,21 @@ local function cursor_goto_first_child_for(self: any, predicate: any): any
 end
 
 function Cursor:goto_first_child_for_byte(byte)
-    return cursor_goto_first_child_for(self, function(n)
-        return n.end_byte > byte
+    return cursor_goto_first_child_for(self, function(r: any): any
+        return r.eb > byte
     end)
 end
 
 function Cursor:goto_first_child_for_point(point)
-    return cursor_goto_first_child_for(self, function(n)
-        return point_le(point, n.end_point)
+    return cursor_goto_first_child_for(self, function(r: any): any
+        return point_le(point, { row = r.er, column = r.ec })
     end)
 end
 
 function Cursor:reset(node)
     self.start = node.i
     self.stack = { node.i }
+    self.cache = {}
 end
 
 function Cursor:reset_to(other)
@@ -695,7 +725,7 @@ Tree.__index = Tree
 local function build_tree(res: any, source: any?, alias: any?): any
     return setmetatable({
         handle = res.handle,
-        nodes = res.nodes,
+        n = res.n,
         root = res.root,
         source = source,
         lang_alias = alias,
@@ -720,8 +750,8 @@ end
 function Tree:root_node_with_offset(offset_bytes, offset_point)
     check_tree(self)
     local view = setmetatable({}, Tree)
-    for k, v in pairs(self) do
-        view[k] = v
+    for key, value in pairs(self) do
+        view[key] = value
     end
     view.byte_offset = offset_bytes
     view.row_offset = offset_point.row
@@ -744,8 +774,7 @@ function Tree:copy()
     if err ~= nil then
         return nil, fail(err, errors.INTERNAL)
     end
-    local copy = build_tree({ handle = res.handle, nodes = self.nodes, root = self.root }, self.source, self.lang_alias)
-    return copy
+    return build_tree({ handle = res.handle, n = self.n, root = self.root }, self.source, self.lang_alias)
 end
 
 function Tree:walk()
@@ -755,7 +784,7 @@ end
 
 function Tree:edit(edit)
     check_tree(self)
-    local function num(key)
+    local function num(key: any): any
         local v = edit[key]
         if type(v) ~= "number" then
             return nil
@@ -794,8 +823,7 @@ function Tree:edit(edit)
     if err ~= nil then
         return false, fail(err, errors.INTERNAL)
     end
-    self.nodes = res.nodes
-    self.root = res.root
+    self.n = res.n
     return true
 end
 

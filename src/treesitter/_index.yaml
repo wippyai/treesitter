@@ -21,7 +21,7 @@ entries:
       comment: Resident tree-sitter engine. Parse trees live in linear memory keyed by handle; parse/free/languages over a JSON op protocol. Only handles + params + small results cross the boundary.
     fs: treesitter:assets
     path: treesitter.wasm
-    hash: sha256:6d2a444ba0d227c361c7db9bbafc734244140422f4ca415939ed3a8ac43500fb
+    hash: sha256:817847f82f6007fb7b18cf20365acd8924476084aa4a2ddb9006de1abe516aa6
     method: op
     imports:
       - wasi:io
