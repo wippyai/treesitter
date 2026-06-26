@@ -21,7 +21,7 @@ entries:
       comment: Resident tree-sitter engine. Parse trees live in linear memory keyed by handle; parse/free/languages over a JSON op protocol. Only handles + params + small results cross the boundary.
     fs: treesitter:assets
     path: treesitter.wasm
-    hash: sha256:51e02bfa5faf42c0cdf3edd47791e84525f6f4bd14382420a493a90b8ead1d36
+    hash: sha256:ee06beb9b6ecec158ea82966d08c1088de5a472166289ad6800d3cd1dd278771
     method: op
     imports:
       - wasi:io
@@ -32,6 +32,25 @@ entries:
       type: inline
     limits:
       max_retained_memory_bytes: 0
+
+  - name: engine_pool
+    kind: function.wasm
+    meta:
+      comment: Stateless multi-instance engine for concurrent bulk work. The `extract` op parses (and optionally queries) in one call and retains nothing, so it parallelizes across the pool.
+    fs: treesitter:assets
+    path: treesitter.wasm
+    hash: sha256:ee06beb9b6ecec158ea82966d08c1088de5a472166289ad6800d3cd1dd278771
+    method: op
+    imports:
+      - wasi:io
+      - wasi:cli
+      - wasi:clocks
+      - wasi:random
+    pool:
+      type: static
+      size: 8
+      workers: 8
+      buffer: 64
 
   - name: treesitter
     kind: library.lua

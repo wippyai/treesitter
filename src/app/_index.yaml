@@ -8,6 +8,26 @@ entries:
       comment: Assertion primitives for the migrated tree-sitter parity tests.
     source: file://assert.lua
 
+  - name: procs
+    kind: process.host
+    meta:
+      comment: Process host running concurrent benchmark workers.
+    host:
+      max_processes: 64
+      workers: 8
+    lifecycle:
+      auto_start: true
+
+  - name: bench_worker
+    kind: process.lua
+    meta:
+      comment: Concurrent benchmark worker; runs N stateless extracts against the pooled engine.
+    source: file://bench_worker.lua
+    method: run
+    modules:
+      - funcs
+      - json
+
   - name: bench
     kind: process.lua
     meta:

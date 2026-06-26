@@ -596,6 +596,48 @@ fn op_free(req: &Value) -> String {
     json!({}).to_string()
 }
 
+fn op_extract(req: &Value) -> String {
+    let language = req.get("language").and_then(|v| v.as_str()).unwrap_or("");
+    let code = match req.get("code").and_then(|v| v.as_str()) {
+        Some(c) => c,
+        None => return err("extract: 'code' required"),
+    };
+    let lang = match language_for(language) {
+        Some(l) => l,
+        None => return err(format!("unsupported language: {}", language)),
+    };
+    let mut parser = Parser::new();
+    if parser.set_language(&lang).is_err() {
+        return err("failed to set language");
+    }
+    let tree = match parser.parse(code, None) {
+        Some(t) => t,
+        None => return err("failed to parse code"),
+    };
+    let n = tree.root_node().descendant_count();
+
+    if let Some(pattern) = req.get("pattern").and_then(|v| v.as_str()) {
+        let query = match Query::new(&lang, pattern) {
+            Ok(q) => q,
+            Err(e) => return err(format!("{} {}", e, e.message)),
+        };
+        let mut cursor = QueryCursor::new();
+        let mut count = 0usize;
+        let mut it = cursor.captures(&query, tree.root_node(), code.as_bytes());
+        while it.next().is_some() {
+            count += 1;
+        }
+        return json!({ "n": n, "captures": count }).to_string();
+    }
+
+    json!({ "n": n }).to_string()
+}
+
+fn op_stats() -> String {
+    let s = store().lock().unwrap();
+    json!({ "trees": s.trees.len(), "next": s.next }).to_string()
+}
+
 fn op_languages() -> String {
     let mut languages = serde_json::Map::new();
     for entry in REGISTRY {
@@ -805,6 +847,8 @@ fn dispatch(request: &str) -> String {
         "descendant" => op_descendant(&req),
         "sexp" => op_sexp(&req),
         "free" => op_free(&req),
+        "extract" => op_extract(&req),
+        "stats" => op_stats(),
         "languages" => op_languages(),
         "language" => op_language(&req),
         "query_new" => op_query_new(&req),

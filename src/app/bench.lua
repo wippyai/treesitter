@@ -107,9 +107,35 @@ local function run()
         floor = math.min(floor, (b - a) / 1e6)
     end
     print(string.format("FLOOR minimal funcs.call round-trip = %.4f ms", floor))
-    for _, kb in ipairs({ 5, 20, 50, 100 }) do
-        bench(kb .. "KB", gen_go(kb * 1024), 5)
+
+    local code = gen_go(6656)
+
+    local function concurrent(workers: number, total: number): (number, number)
+        local events = process.events()
+        local per = math.floor(total / workers)
+        local t = now_ns()
+        for _ = 1, workers do
+            process.spawn_monitored("app:bench_worker", "app:procs", per, code)
+        end
+        local done = 0
+        while done < workers do
+            local sel = channel.select({ events:case_receive() })
+            if sel.value ~= nil and sel.value.kind == process.event.EXIT then
+                done = done + 1
+            end
+        end
+        return (now_ns() - t) / 1e6, per * workers
     end
+
+    local TOTAL = 800
+    local s1, f1 = concurrent(1, TOTAL)
+    print(string.format("CONC sequential (1 worker)  | %d files (avg %d B) | %.0f ms (%.3f ms/file)", f1, #code, s1, s1 / f1))
+    local s8, f8 = concurrent(8, TOTAL)
+    print(string.format("CONC parallel   (8 workers) | %d files | %.0f ms (%.3f ms/file) | speedup %.1fx", f8, s8, s8 / f8, s1 / s8))
+
+    local raw = funcs.call("treesitter:engine", json.encode({ op = "stats" }))
+    local stats: any = json.decode(raw :: string)
+    print(string.format("STATS resident trees after run = %d (handle counter %d)", stats.trees, stats.next))
     print("BENCH-END")
     return true
 end
