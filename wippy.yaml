@@ -1,0 +1,14 @@
+organization: wippyai
+module: treesitter
+version: 0.1.0
+description: Resident tree-sitter parsing and syntax analysis engine (WASM) for the Wippy runtime.
+license: MIT
+keywords:
+  - tree-sitter
+  - parsing
+  - syntax
+  - wasm
+embed:
+  - treesitter:assets
+exclude:
+  - "app:**"

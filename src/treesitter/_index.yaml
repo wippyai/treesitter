@@ -1,0 +1,42 @@
+version: "1.0"
+namespace: treesitter
+
+entries:
+  - name: definition
+    kind: ns.definition
+    meta:
+      title: treesitter
+      description: Resident tree-sitter parsing engine (WASM) for the Wippy runtime.
+
+  - name: assets
+    kind: fs.directory
+    meta:
+      comment: Filesystem holding the tree-sitter WebAssembly engine.
+    directory: ./src/treesitter/assets
+
+  - name: engine
+    kind: function.wasm
+    meta:
+      comment: Resident tree-sitter engine. Parse trees live in linear memory keyed by handle; parse/free/languages over a JSON op protocol. Only handles + params + small results cross the boundary.
+    fs: treesitter:assets
+    path: treesitter.wasm
+    hash: sha256:00de13a8f281c5c1e795247bf80ca467cd2854400f02d08ae98e202122e642a5
+    method: op
+    imports:
+      - wasi:io
+      - wasi:cli
+      - wasi:clocks
+      - wasi:random
+    pool:
+      type: inline
+    limits:
+      max_retained_memory_bytes: 0
+
+  - name: treesitter
+    kind: library.lua
+    meta:
+      comment: Public Lua SDK. Parses via the resident engine; Node/Tree navigation is pure Lua over the serialized tree.
+    source: file://treesitter.lua
+    modules:
+      - funcs
+      - json

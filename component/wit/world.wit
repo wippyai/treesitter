@@ -1,0 +1,5 @@
+package wippy:treesitter;
+
+world treesitter {
+    export op: func(request: string) -> string;
+}

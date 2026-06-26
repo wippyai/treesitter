@@ -1,0 +1,15 @@
+version: "1.0"
+namespace: app
+
+entries:
+  - name: smoke_test
+    kind: function.lua
+    meta:
+      type: test
+      suite: treesitter.smoke
+      description: End-to-end parse of Go source through the resident WASM engine.
+    source: file://smoke_test.lua
+    method: run
+    imports:
+      test: wippy.test:test
+      treesitter: treesitter:treesitter

@@ -1,0 +1,22 @@
+[package]
+name = "treesitter"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Resident tree-sitter parsing engine for the Wippy runtime (WASM)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.58"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tree-sitter = "0.25"
+tree-sitter-language = "0.1"
+tree-sitter-go = "0.25"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
