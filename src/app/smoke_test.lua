@@ -9,6 +9,21 @@ func hello() string {
 }
 ]]
 
+local ROOT_KIND = {
+    { lang = "go", code = "package main\n", root = "source_file" },
+    { lang = "golang", code = "package main\n", root = "source_file" },
+    { lang = "javascript", code = "const x = 1;\n", root = "program" },
+    { lang = "js", code = "const x = 1;\n", root = "program" },
+    { lang = "typescript", code = "const x: number = 1;\n", root = "program" },
+    { lang = "tsx", code = "const x = 1;\n", root = "program" },
+    { lang = "python", code = "x = 1\n", root = "module" },
+    { lang = "py", code = "x = 1\n", root = "module" },
+    { lang = "php", code = "<?php $x = 1;\n", root = "program" },
+    { lang = "csharp", code = "class A {}\n", root = "compilation_unit" },
+    { lang = "html", code = "<html></html>\n", root = "document" },
+    { lang = "lua", code = "local x = 1\n", root = "chunk" },
+}
+
 local function define()
     test.describe("treesitter.smoke", function()
         test.it("parses Go and exposes the root node", function()
@@ -39,9 +54,33 @@ local function define()
             tree:close()
         end)
 
-        test.it("reports supported languages", function()
+        test.it("parses every supported language to its expected root kind", function()
+            for _, case in ipairs(ROOT_KIND) do
+                local tree, err = treesitter.parse(case.lang, case.code)
+                test.eq(err, nil)
+                test.eq(tree:root_node():kind(), case.root)
+                tree:close()
+            end
+        end)
+
+        test.it("reports supported languages by canonical name", function()
             local langs = treesitter.supported_languages()
             test.eq(langs.go, true)
+            test.eq(langs.javascript, true)
+            test.eq(langs.typescript, true)
+            test.eq(langs["typescript+jsx"], true)
+            test.eq(langs.python, true)
+            test.eq(langs.php, true)
+            test.eq(langs["c#"], true)
+            test.eq(langs.html, true)
+            test.eq(langs.lua, true)
+            test.eq(langs.golang, nil)
+        end)
+
+        test.it("rejects an unsupported language with an error", function()
+            local tree, err = treesitter.parse("cobol", "IDENTIFICATION DIVISION.")
+            test.eq(tree, nil)
+            test.eq(err == nil, false)
         end)
     end)
 end

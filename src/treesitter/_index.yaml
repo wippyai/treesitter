@@ -4,6 +4,7 @@ namespace: treesitter
 entries:
   - name: definition
     kind: ns.definition
+    readme: file://README.md
     meta:
       title: treesitter
       description: Resident tree-sitter parsing engine (WASM) for the Wippy runtime.
@@ -20,7 +21,7 @@ entries:
       comment: Resident tree-sitter engine. Parse trees live in linear memory keyed by handle; parse/free/languages over a JSON op protocol. Only handles + params + small results cross the boundary.
     fs: treesitter:assets
     path: treesitter.wasm
-    hash: sha256:00de13a8f281c5c1e795247bf80ca467cd2854400f02d08ae98e202122e642a5
+    hash: sha256:961f07fc22a0b9a8723754f9709924f0ec3f0bb2a92f51da0bf3f607cc441ab5
     method: op
     imports:
       - wasi:io

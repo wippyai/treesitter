@@ -45,12 +45,67 @@ fn err(msg: impl Into<String>) -> String {
     json!({ "error": msg.into() }).to_string()
 }
 
+struct LangEntry {
+    name: &'static str,
+    aliases: &'static [&'static str],
+    func: fn() -> tree_sitter::Language,
+}
+
+fn lang_lua() -> tree_sitter::Language {
+    tree_sitter_lua::LANGUAGE.into()
+}
+
+fn lang_php() -> tree_sitter::Language {
+    tree_sitter_php::LANGUAGE_PHP.into()
+}
+
+fn lang_go() -> tree_sitter::Language {
+    tree_sitter_go::LANGUAGE.into()
+}
+
+fn lang_javascript() -> tree_sitter::Language {
+    tree_sitter_javascript::LANGUAGE.into()
+}
+
+fn lang_tsx() -> tree_sitter::Language {
+    tree_sitter_typescript::LANGUAGE_TSX.into()
+}
+
+fn lang_typescript() -> tree_sitter::Language {
+    tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+}
+
+fn lang_python() -> tree_sitter::Language {
+    tree_sitter_python::LANGUAGE.into()
+}
+
+fn lang_csharp() -> tree_sitter::Language {
+    tree_sitter_c_sharp::LANGUAGE.into()
+}
+
+fn lang_html() -> tree_sitter::Language {
+    tree_sitter_html::LANGUAGE.into()
+}
+
+static REGISTRY: &[LangEntry] = &[
+    LangEntry { name: "lua", aliases: &["lua"], func: lang_lua },
+    LangEntry { name: "php", aliases: &["php"], func: lang_php },
+    LangEntry { name: "go", aliases: &["go", "golang"], func: lang_go },
+    LangEntry { name: "javascript", aliases: &["js", "javascript"], func: lang_javascript },
+    LangEntry { name: "typescript+jsx", aliases: &["tsx"], func: lang_tsx },
+    LangEntry { name: "typescript", aliases: &["ts", "typescript"], func: lang_typescript },
+    LangEntry { name: "python", aliases: &["python", "py"], func: lang_python },
+    LangEntry { name: "c#", aliases: &["csharp", "c#", "cs"], func: lang_csharp },
+    LangEntry { name: "html", aliases: &["html", "html5"], func: lang_html },
+];
+
 fn language_for(alias: &str) -> Option<tree_sitter::Language> {
-    let lang = match alias {
-        "go" | "golang" => tree_sitter_go::LANGUAGE,
-        _ => return None,
-    };
-    Some(lang.into())
+    for entry in REGISTRY {
+        if entry.aliases.contains(&alias) {
+            return Some((entry.func)());
+        }
+    }
+    None
 }
 
 #[derive(Serialize)]
@@ -175,7 +230,11 @@ fn op_free(req: &Value) -> String {
 }
 
 fn op_languages() -> String {
-    json!({ "languages": { "go": true } }).to_string()
+    let mut languages = serde_json::Map::new();
+    for entry in REGISTRY {
+        languages.insert(entry.name.to_string(), Value::Bool(true));
+    }
+    json!({ "languages": languages }).to_string()
 }
 
 fn dispatch(request: &str) -> String {
