@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 
+use serde::Serialize;
 use serde_json::{json, Value};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, Tree};
@@ -114,7 +115,7 @@ fn language_for(alias: &str) -> Option<Language> {
     None
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct Columns {
     n: usize,
     root: usize,
@@ -309,6 +310,35 @@ fn node_record(c: &Columns, id: usize) -> Value {
     rec
 }
 
+fn ensure_columns(st: &mut StoredTree) -> Result<(), String> {
+    if st.cols.is_none() {
+        let lang = match language_for(&st.lang) {
+            Some(l) => l,
+            None => return Err("stored language unavailable".to_string()),
+        };
+        let cols = build_columns(&st.tree, &lang);
+        st.cols = Some(cols);
+    }
+    Ok(())
+}
+
+fn op_columns(req: &Value) -> String {
+    let handle = match req.get("handle").and_then(|v| v.as_u64()) {
+        Some(h) => h,
+        None => return err("columns: 'handle' required"),
+    };
+    let mut s = store().lock().unwrap();
+    let st = match s.trees.get_mut(&handle) {
+        Some(st) => st,
+        None => return err("columns: unknown handle"),
+    };
+    if let Err(e) = ensure_columns(st) {
+        return err(format!("columns: {}", e));
+    }
+    serde_json::to_string(st.cols.as_ref().unwrap())
+        .unwrap_or_else(|_| err("columns: serialize failed"))
+}
+
 fn op_node(req: &Value) -> String {
     let handle = match req.get("handle").and_then(|v| v.as_u64()) {
         Some(h) => h,
@@ -320,13 +350,8 @@ fn op_node(req: &Value) -> String {
         Some(st) => st,
         None => return err("node: unknown handle"),
     };
-    if st.cols.is_none() {
-        let lang = match language_for(&st.lang) {
-            Some(l) => l,
-            None => return err("node: stored language unavailable"),
-        };
-        let cols = build_columns(&st.tree, &lang);
-        st.cols = Some(cols);
+    if let Err(e) = ensure_columns(st) {
+        return err(format!("node: {}", e));
     }
     let c = st.cols.as_ref().unwrap();
     if id >= c.n {
@@ -772,6 +797,7 @@ fn dispatch(request: &str) -> String {
     match req.get("op").and_then(|v| v.as_str()).unwrap_or("") {
         "parse" => op_parse(&req),
         "node" => op_node(&req),
+        "columns" => op_columns(&req),
         "clone" => op_clone(&req),
         "edit" => op_edit(&req),
         "changed_ranges" => op_changed_ranges(&req),

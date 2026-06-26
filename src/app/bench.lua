@@ -107,28 +107,8 @@ local function run()
         floor = math.min(floor, (b - a) / 1e6)
     end
     print(string.format("FLOOR minimal funcs.call round-trip = %.4f ms", floor))
-    for _, kb in ipairs({ 1, 2, 5, 10, 20, 50 }) do
-        local code = gen_go(kb * 1024)
-        local warm = treesitter.parse("go", code)
-        local n = warm.n
-        warm:close()
-        local best = math.huge
-        for _ = 1, 20 do
-            local a = now_ns()
-            local tr = treesitter.parse("go", code)
-            local b = now_ns()
-            best = math.min(best, (b - a) / 1e6)
-            tr:close()
-        end
-        local q = treesitter.query("go", "(function_declaration name: (identifier) @n)")
-        local tr = treesitter.parse("go", code)
-        local qa = now_ns()
-        local caps = q:captures(tr:root_node(), code)
-        local qb = now_ns()
-        q:close()
-        tr:close()
-        print(string.format("PARSE %-5s | %7d B | %6d nodes | parse %6.3f ms | query %6.3f ms (%d caps)",
-            kb .. "KB", #code, n, best, (qb - qa) / 1e6, #caps))
+    for _, kb in ipairs({ 5, 20, 50, 100 }) do
+        bench(kb .. "KB", gen_go(kb * 1024), 5)
     end
     print("BENCH-END")
     return true

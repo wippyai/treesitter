@@ -68,6 +68,82 @@ local function flagged(record: any, bit: any): boolean
     return math.floor(record.flags / bit) % 2 >= 1
 end
 
+local function materialize(tree: any): any
+    if tree.cols == nil then
+        local cols, err = call({ op = "columns", handle = tree.handle })
+        if err ~= nil or cols == nil then
+            error("treesitter: columns fetch failed: " .. tostring(err), 2)
+        end
+        cols.gn = cols.gn or {}
+        cols.fields = cols.fields or {}
+        cols.field_ids = cols.field_ids or {}
+        tree.cols = cols
+    end
+    return tree.cols
+end
+
+local function record_from_cols(cols: any, i: any): any
+    local off = cols.ch_off[i + 1]
+    local stop = cols.ch_off[i + 2]
+    local children = {}
+    local named = {}
+    for j = off + 1, stop do
+        local cid = cols.ch_val[j]
+        children[#children + 1] = cid
+        if math.floor(cols.flags[cid + 1] / FLAG_NAMED) % 2 >= 1 then
+            named[#named + 1] = cid
+        end
+    end
+    local r = {
+        kind = cols.kinds[cols.k[i + 1] + 1],
+        flags = cols.flags[i + 1],
+        sb = cols.sb[i + 1],
+        eb = cols.eb[i + 1],
+        sr = cols.sr[i + 1],
+        sc = cols.sc[i + 1],
+        er = cols.er[i + 1],
+        ec = cols.ec[i + 1],
+        parent = cols.parent[i + 1],
+        dc = cols.dc[i + 1],
+        children = children,
+        named_children = named,
+        fields = cols.fields[tostring(i)],
+        field_ids = cols.field_ids[tostring(i)],
+    }
+    local g = cols.gn[tostring(i)]
+    if g ~= nil then
+        r.gn = cols.kinds[g + 1]
+    end
+    return r
+end
+
+local function col_child_count(cols: any, i: any): any
+    return cols.ch_off[i + 2] - cols.ch_off[i + 1]
+end
+
+local function col_child(cols: any, i: any, index: any): any
+    local off = cols.ch_off[i + 1]
+    if index < 0 or index >= cols.ch_off[i + 2] - off then
+        return nil
+    end
+    return cols.ch_val[off + index + 1]
+end
+
+local function col_position(cols: any, i: any): (any, any)
+    local p = cols.parent[i + 1]
+    if p < 0 then
+        return nil, nil
+    end
+    local off = cols.ch_off[p + 1]
+    local count = cols.ch_off[p + 2] - off
+    for pos = 0, count - 1 do
+        if cols.ch_val[off + pos + 1] == i then
+            return p, pos
+        end
+    end
+    return nil, nil
+end
+
 local Node = {}
 Node.__index = Node
 
@@ -80,7 +156,11 @@ end
 
 local function rec(self: any): any
     if self.record == nil then
-        self.record = fetch_record(self.tree, self.i)
+        if self.tree.cols ~= nil then
+            self.record = record_from_cols(self.tree.cols, self.i)
+        else
+            self.record = fetch_record(self.tree, self.i)
+        end
     end
     return self.record
 end
@@ -269,6 +349,7 @@ local Cursor = {}
 Cursor.__index = Cursor
 
 local function new_cursor(tree: any, start_id: any): any
+    materialize(tree)
     return setmetatable({
         tree = tree,
         start = start_id,
@@ -281,7 +362,7 @@ end
 local function cursor_rec(self: any, id: any): any
     local r = self.cache[id]
     if r == nil then
-        r = fetch_record(self.tree, id)
+        r = record_from_cols(self.tree.cols, id)
         self.cache[id] = r
     end
     return r
